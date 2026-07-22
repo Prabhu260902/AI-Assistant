@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Env
+config/.env
+.env
+
+# Node/Next.js (frontend/ has its own .gitignore too)
+node_modules/
+.next/
+
+# OS
+.DS_Store
