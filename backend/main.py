@@ -8,16 +8,19 @@ from dataclasses import asdict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from agents.implementation import get_repo_source
 from graphs.code_search import run_code_search
 from graphs.feature_planner import run_feature_plan
 from graphs.implementation import run_implementation
 from graphs.passthrough import run_passthrough
+from graphs.pr_review import run_pr_review
 from graphs.ticket_generator import run_generate_tickets
 from services.code_apply import ApplyError, FileChange, apply_changes
 from services.config import get_settings
+from services.git_diff import GitDiffError
 from services.logging import configure_logging
+from services.repo_registry import get_repo_source
 from state.implementation_state import ProposedChange
+from state.review_state import Finding
 from state.ticket_state import Epic
 
 logger = logging.getLogger(__name__)
@@ -109,6 +112,17 @@ class ImplementApplyResponse(BaseModel):
     files_written: list[str]
 
 
+class ReviewRequest(BaseModel):
+    repo_id: str
+    base_ref: str
+    head_ref: str
+
+
+class ReviewResponse(BaseModel):
+    summary: str
+    findings: list[Finding]
+
+
 def _configure_langsmith() -> None:
     settings = get_settings()
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing).lower()
@@ -191,6 +205,15 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
         return ImplementApplyResponse(branch=summary.branch, files_written=summary.files_written)
+
+    @app.post("/review", response_model=ReviewResponse)
+    async def review(request: ReviewRequest) -> ReviewResponse:
+        try:
+            result = run_pr_review(request.repo_id, request.base_ref, request.head_ref)
+        except GitDiffError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return ReviewResponse(summary=result["summary"], findings=result["findings"])
 
     return app
 

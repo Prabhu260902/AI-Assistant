@@ -8,13 +8,10 @@ separate explicit apply step the caller must invoke after reviewing diffs.
 import difflib
 from pathlib import Path
 
-from sqlalchemy import select
-
 from graphs.feature_planner import run_feature_plan
 from prompts.implementation import build_implementation_prompt
-from services.db import session_scope
 from services.llm import get_llm_provider
-from services.models import Repository
+from services.repo_registry import get_repo_source
 from state.implementation_state import ImplementationState, ProposedChange
 
 
@@ -38,12 +35,6 @@ def plan_node(state: ImplementationState) -> dict:
         "risks": plan_state["risks"],
         "context_results": plan_state["context_results"],
     }
-
-
-def get_repo_source(repo_id: str) -> str | None:
-    with session_scope() as session:
-        repository = session.execute(select(Repository).where(Repository.repo_id == repo_id)).scalar_one_or_none()
-        return repository.source if repository else None
 
 
 def _compute_diff(file_path: str, original: str, new: str) -> str:
