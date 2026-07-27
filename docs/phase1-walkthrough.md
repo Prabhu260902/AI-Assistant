@@ -239,9 +239,11 @@ run install scripts for a package until you approve them.
 
 | Service | Image | Port (host→container) | Healthcheck |
 |---|---|---|---|
-| `postgres` | `postgres:16-alpine` | 5432→5432 | `pg_isready` |
+| `postgres` | `postgres:16-alpine` | 55432→5432 | `pg_isready` |
 | `chroma` | `chromadb/chroma:latest` | 8001→8000 | bash TCP check on port 8000 (see §7) |
 | `backend` | built from `docker/backend.Dockerfile` | 8000→8000 | — (depends on the other two being healthy) |
+
+`postgres`'s host port was moved from the default 5432 to 55432 in Phase 3, after discovering a locally-installed (non-Docker) Postgres on the host was already bound to 5432 and silently intercepting connections meant for the container. Container-to-container traffic (e.g. the `backend` service's own `DATABASE_URL`) still uses the internal port 5432 — only the host-facing mapping changed.
 
 `backend` only starts after both `postgres` and `chroma` report healthy
 (`depends_on: condition: service_healthy`). Its env vars are populated from

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
 
-    database_url: str = "postgresql+psycopg://allease:allease@localhost:5432/allease"
+    database_url: str = "postgresql+psycopg://allease:allease@localhost:55432/allease"
 
     vector_store_provider: str = "chroma"
     chroma_host: str = "localhost"
