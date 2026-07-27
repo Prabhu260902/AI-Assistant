@@ -1,4 +1,7 @@
 import json
+import urllib.error
+
+import pytest
 
 from services.llm import GroqProvider
 
@@ -47,3 +50,57 @@ def test_complete_with_json_mode_sets_response_format(monkeypatch):
 
     assert result == '{"x": 1}'
     assert captured["body"]["response_format"] == {"type": "json_object"}
+
+
+def _rate_limited_error() -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(url="u", code=429, msg="Too Many Requests", hdrs=None, fp=None)
+
+
+def test_complete_falls_back_to_next_model_on_429(monkeypatch):
+    attempted_models = []
+
+    def fake_urlopen(request):
+        body = json.loads(request.data)
+        attempted_models.append(body["model"])
+        if body["model"] == "primary":
+            raise _rate_limited_error()
+        return _FakeResponse({"choices": [{"message": {"content": "from fallback"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    provider = GroqProvider(api_key="k", model="primary", fallback_models=["fallback"])
+    result = provider.complete("hi")
+
+    assert result == "from fallback"
+    assert attempted_models == ["primary", "fallback"]
+
+
+def test_complete_raises_after_all_models_rate_limited(monkeypatch):
+    def fake_urlopen(request):
+        raise _rate_limited_error()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    provider = GroqProvider(api_key="k", model="primary", fallback_models=["fallback"])
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        provider.complete("hi")
+    assert exc_info.value.code == 429
+
+
+def test_complete_does_not_fall_back_on_non_rate_limit_error(monkeypatch):
+    attempted_models = []
+
+    def fake_urlopen(request):
+        body = json.loads(request.data)
+        attempted_models.append(body["model"])
+        raise urllib.error.HTTPError(url="u", code=400, msg="Bad Request", hdrs=None, fp=None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    provider = GroqProvider(api_key="k", model="primary", fallback_models=["fallback"])
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        provider.complete("hi")
+    assert exc_info.value.code == 400
+    assert attempted_models == ["primary"]

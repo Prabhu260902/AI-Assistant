@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
+    # Tried in order if the primary model 429s (rate/quota limited) — each
+    # Groq model has its own separate rate-limit bucket, so falling back
+    # actually unblocks a request rather than hitting the same wall again.
+    groq_fallback_models: list[str] = ["llama-3.1-8b-instant", "openai/gpt-oss-20b"]
 
     database_url: str = "postgresql+psycopg://allease:allease@localhost:55432/allease"
 

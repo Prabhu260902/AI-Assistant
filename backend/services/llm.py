@@ -6,6 +6,7 @@ or providers (Groq, another Llama host, etc.) is a config change via
 """
 
 import json
+import urllib.error
 import urllib.request
 from typing import Protocol
 
@@ -27,13 +28,30 @@ class LLMProvider(Protocol):
 
 
 class GroqProvider:
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, fallback_models: list[str] | None = None) -> None:
         self._api_key = api_key
         self._model = model
+        self._fallback_models = fallback_models or []
 
     def complete(self, prompt: str, json_mode: bool = False) -> str:
+        models = [self._model, *self._fallback_models]
+        for index, model in enumerate(models):
+            try:
+                return self._complete_with_model(model, prompt, json_mode)
+            except urllib.error.HTTPError as exc:
+                # Each Groq model has its own separate rate/quota bucket, so
+                # a 429 on one model doesn't mean the next will also fail —
+                # only fall through on 429, and only if another model is
+                # left to try; any other error (bad request, auth, etc.)
+                # propagates immediately since a different model won't fix it.
+                is_last_model = index == len(models) - 1
+                if exc.code == 429 and not is_last_model:
+                    continue
+                raise
+
+    def _complete_with_model(self, model: str, prompt: str, json_mode: bool) -> str:
         payload = {
-            "model": self._model,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
         if json_mode:
@@ -55,12 +73,16 @@ class GroqProvider:
             },
         )
         with urllib.request.urlopen(request) as response:
-            payload = json.loads(response.read())
-        return payload["choices"][0]["message"]["content"]
+            response_payload = json.loads(response.read())
+        return response_payload["choices"][0]["message"]["content"]
 
 
 def get_llm_provider() -> LLMProvider:
     settings = get_settings()
     if settings.llm_provider == "groq":
-        return GroqProvider(api_key=settings.groq_api_key, model=settings.groq_model)
+        return GroqProvider(
+            api_key=settings.groq_api_key,
+            model=settings.groq_model,
+            fallback_models=settings.groq_fallback_models,
+        )
     raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

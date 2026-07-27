@@ -3,7 +3,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from graphs.feature_planner import run_feature_plan
 from graphs.implementation import run_implementation
 from graphs.passthrough import run_passthrough
 from graphs.pr_review import run_pr_review
+from graphs.router import run_copilot
 from graphs.ticket_generator import run_generate_tickets
 from services.code_apply import ApplyError, FileChange, apply_changes
 from services.config import get_settings
@@ -150,6 +151,29 @@ class ArchitectureResponse(BaseModel):
     edges: list[FlowEdgeModel]
 
 
+class CopilotRequest(BaseModel):
+    repo_id: str
+    message: str
+    top_k: int = 5
+
+
+class CopilotResponse(BaseModel):
+    intent: str
+    result: dict
+
+
+def _to_jsonable(value):
+    if is_dataclass(value) and not isinstance(value, type):
+        return _to_jsonable(asdict(value))
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_jsonable(item) for key, item in value.items()}
+    return value
+
+
 def _configure_langsmith() -> None:
     settings = get_settings()
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing).lower()
@@ -254,6 +278,15 @@ def create_app() -> FastAPI:
             nodes=nodes,
             edges=edges,
         )
+
+    @app.post("/copilot", response_model=CopilotResponse)
+    async def copilot(request: CopilotRequest) -> CopilotResponse:
+        try:
+            state = run_copilot(request.repo_id, request.message, request.top_k)
+        except GitDiffError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return CopilotResponse(intent=state["intent"], result=_to_jsonable(state["result"]))
 
     return app
 
