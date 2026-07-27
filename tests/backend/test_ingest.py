@@ -89,7 +89,7 @@ def test_secret_files_are_never_ingested(tmp_path, monkeypatch):
 
 def test_index_chunks_upserts_into_ephemeral_chroma():
     client = chromadb.EphemeralClient()
-    collection = _ephemeral_collection(client, "test-repo")
+    collection = _ephemeral_collection(client, "ingest-test-repo-1")
     chunks = [
         {"id": "a", "document": "def foo(): pass", "metadata": {"file_path": "a.py"}},
         {"id": "b", "document": "def bar(): pass", "metadata": {"file_path": "b.py"}},
@@ -103,7 +103,7 @@ def test_index_chunks_upserts_into_ephemeral_chroma():
 
 def test_index_chunks_upsert_is_idempotent():
     client = chromadb.EphemeralClient()
-    collection = _ephemeral_collection(client, "test-repo-2")
+    collection = _ephemeral_collection(client, "ingest-test-repo-2")
     chunks = [{"id": "a", "document": "def foo(): pass", "metadata": {"file_path": "a.py"}}]
 
     index_chunks(collection, chunks)

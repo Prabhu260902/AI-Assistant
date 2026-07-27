@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from graphs.code_search import run_code_search
 from graphs.passthrough import run_passthrough
 from services.config import get_settings
 from services.logging import configure_logging
@@ -20,6 +21,24 @@ class GraphInvokeRequest(BaseModel):
 
 class GraphInvokeResponse(BaseModel):
     output: str
+
+
+class SearchRequest(BaseModel):
+    repo_id: str
+    query: str
+    top_k: int = 5
+
+
+class Citation(BaseModel):
+    file_path: str
+    start_line: int
+    end_line: int
+    snippet: str
+
+
+class SearchResponse(BaseModel):
+    answer: str
+    citations: list[Citation]
 
 
 def _configure_langsmith() -> None:
@@ -51,6 +70,11 @@ def create_app() -> FastAPI:
     async def graph_invoke(request: GraphInvokeRequest) -> GraphInvokeResponse:
         output = run_passthrough(request.input)
         return GraphInvokeResponse(output=output)
+
+    @app.post("/search", response_model=SearchResponse)
+    async def search(request: SearchRequest) -> SearchResponse:
+        result = run_code_search(request.repo_id, request.query, request.top_k)
+        return SearchResponse(answer=result["answer"], citations=result["citations"])
 
     return app
 

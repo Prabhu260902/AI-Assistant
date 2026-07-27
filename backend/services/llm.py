@@ -40,6 +40,11 @@ class GroqProvider:
             headers={
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
+                # Groq's API sits behind Cloudflare, which blocks urllib's
+                # default "Python-urllib/x.y" User-Agent as a bot (Cloudflare
+                # error 1010) — an explicit UA is required for requests to
+                # succeed at all.
+                "User-Agent": "allease-engineering-assistant/0.1",
             },
         )
         with urllib.request.urlopen(request) as response:
