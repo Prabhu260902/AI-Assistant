@@ -3,11 +3,13 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from graphs.code_search import run_code_search
+from graphs.feature_planner import run_feature_plan
 from graphs.passthrough import run_passthrough
 from services.config import get_settings
 from services.logging import configure_logging
@@ -39,6 +41,25 @@ class Citation(BaseModel):
 class SearchResponse(BaseModel):
     answer: str
     citations: list[Citation]
+
+
+class PlanRequest(BaseModel):
+    repo_id: str
+    feature_description: str
+    top_k: int = 5
+
+
+class AffectedModuleModel(BaseModel):
+    file_path: str
+    reason: str
+    fan_in: int
+    has_api_endpoint: bool
+
+
+class PlanResponse(BaseModel):
+    plan: str
+    affected_modules: list[AffectedModuleModel]
+    risks: list[str]
 
 
 def _configure_langsmith() -> None:
@@ -75,6 +96,15 @@ def create_app() -> FastAPI:
     async def search(request: SearchRequest) -> SearchResponse:
         result = run_code_search(request.repo_id, request.query, request.top_k)
         return SearchResponse(answer=result["answer"], citations=result["citations"])
+
+    @app.post("/plan", response_model=PlanResponse)
+    async def plan(request: PlanRequest) -> PlanResponse:
+        result = run_feature_plan(request.repo_id, request.feature_description, request.top_k)
+        return PlanResponse(
+            plan=result["plan"],
+            affected_modules=[asdict(module) for module in result["affected_modules"]],
+            risks=result["risks"],
+        )
 
     return app
 
