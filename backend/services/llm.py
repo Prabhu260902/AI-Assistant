@@ -15,8 +15,14 @@ GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
 class LLMProvider(Protocol):
-    def complete(self, prompt: str) -> str:
-        """Return a single completion for the given prompt."""
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
+        """Return a single completion for the given prompt.
+
+        `json_mode` asks the provider to constrain output to valid JSON
+        (Groq's `response_format: json_object`) — callers producing
+        structured output should still validate/parse defensively, this is
+        a reliability aid, not a schema guarantee.
+        """
         ...
 
 
@@ -25,13 +31,14 @@ class GroqProvider:
         self._api_key = api_key
         self._model = model
 
-    def complete(self, prompt: str) -> str:
-        body = json.dumps(
-            {
-                "model": self._model,
-                "messages": [{"role": "user", "content": prompt}],
-            }
-        ).encode("utf-8")
+    def complete(self, prompt: str, json_mode: bool = False) -> str:
+        payload = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        body = json.dumps(payload).encode("utf-8")
 
         request = urllib.request.Request(
             GROQ_CHAT_COMPLETIONS_URL,

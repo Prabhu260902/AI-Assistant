@@ -11,8 +11,10 @@ from pydantic import BaseModel
 from graphs.code_search import run_code_search
 from graphs.feature_planner import run_feature_plan
 from graphs.passthrough import run_passthrough
+from graphs.ticket_generator import run_generate_tickets
 from services.config import get_settings
 from services.logging import configure_logging
+from state.ticket_state import Epic
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,19 @@ class PlanResponse(BaseModel):
     risks: list[str]
 
 
+class TicketRequest(BaseModel):
+    repo_id: str
+    feature_description: str
+    top_k: int = 5
+
+
+class TicketResponse(BaseModel):
+    plan: str
+    affected_modules: list[AffectedModuleModel]
+    risks: list[str]
+    epics: list[Epic]
+
+
 def _configure_langsmith() -> None:
     settings = get_settings()
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing).lower()
@@ -104,6 +119,16 @@ def create_app() -> FastAPI:
             plan=result["plan"],
             affected_modules=[asdict(module) for module in result["affected_modules"]],
             risks=result["risks"],
+        )
+
+    @app.post("/tickets", response_model=TicketResponse)
+    async def tickets(request: TicketRequest) -> TicketResponse:
+        result = run_generate_tickets(request.repo_id, request.feature_description, request.top_k)
+        return TicketResponse(
+            plan=result["plan"],
+            affected_modules=[asdict(module) for module in result["affected_modules"]],
+            risks=result["risks"],
+            epics=result["epics"],
         )
 
     return app
