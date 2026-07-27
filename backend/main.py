@@ -5,15 +5,19 @@ import os
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from agents.implementation import get_repo_source
 from graphs.code_search import run_code_search
 from graphs.feature_planner import run_feature_plan
+from graphs.implementation import run_implementation
 from graphs.passthrough import run_passthrough
 from graphs.ticket_generator import run_generate_tickets
+from services.code_apply import ApplyError, FileChange, apply_changes
 from services.config import get_settings
 from services.logging import configure_logging
+from state.implementation_state import ProposedChange
 from state.ticket_state import Epic
 
 logger = logging.getLogger(__name__)
@@ -77,6 +81,34 @@ class TicketResponse(BaseModel):
     epics: list[Epic]
 
 
+class ImplementRequest(BaseModel):
+    repo_id: str
+    feature_description: str
+    top_k: int = 5
+
+
+class ImplementResponse(BaseModel):
+    plan: str
+    risks: list[str]
+    proposed_changes: list[ProposedChange]
+
+
+class FileChangeModel(BaseModel):
+    file_path: str
+    new_content: str
+
+
+class ImplementApplyRequest(BaseModel):
+    repo_id: str
+    changes: list[FileChangeModel]
+    branch_name: str
+
+
+class ImplementApplyResponse(BaseModel):
+    branch: str
+    files_written: list[str]
+
+
 def _configure_langsmith() -> None:
     settings = get_settings()
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing).lower()
@@ -130,6 +162,35 @@ def create_app() -> FastAPI:
             risks=result["risks"],
             epics=result["epics"],
         )
+
+    @app.post("/implement", response_model=ImplementResponse)
+    async def implement(request: ImplementRequest) -> ImplementResponse:
+        """Dry run only — retrieves, plans, and proposes diffs. Writes nothing."""
+        result = run_implementation(request.repo_id, request.feature_description, request.top_k)
+        return ImplementResponse(
+            plan=result["plan"],
+            risks=result["risks"],
+            proposed_changes=result["proposed_changes"],
+        )
+
+    @app.post("/implement/apply", response_model=ImplementApplyResponse)
+    async def implement_apply(request: ImplementApplyRequest) -> ImplementApplyResponse:
+        """Writes files to disk on a new git branch. Call only after reviewing
+        the diffs from /implement — nothing here is auto-approved."""
+        repo_source = get_repo_source(request.repo_id)
+        if repo_source is None:
+            raise HTTPException(status_code=404, detail=f"Unknown repo_id: {request.repo_id}")
+
+        try:
+            summary = apply_changes(
+                repo_source,
+                [FileChange(file_path=c.file_path, new_content=c.new_content) for c in request.changes],
+                request.branch_name,
+            )
+        except ApplyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return ImplementApplyResponse(branch=summary.branch, files_written=summary.files_written)
 
     return app
 
