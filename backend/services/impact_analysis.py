@@ -10,14 +10,12 @@ text. Disclosed heuristic, same spirit as Phase 3's own resolution logic.
 """
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from sqlalchemy import or_, select
 
 from services.db import session_scope
+from services.import_resolution import fragments_for
 from services.models import ApiEndpoint, File, Import, Repository
-
-MIN_FRAGMENT_LENGTH = 3
 
 
 @dataclass
@@ -26,19 +24,6 @@ class AffectedModule:
     reason: str
     fan_in: int
     has_api_endpoint: bool
-
-
-def _fragments_for(file_path: str) -> list[str]:
-    path = Path(file_path)
-    stem = path.stem
-    fragments = set()
-    if len(stem) >= MIN_FRAGMENT_LENGTH:
-        fragments.add(stem)
-    if path.parent != Path("."):
-        dotted = f"{path.parent.name}.{stem}"
-        if len(dotted) >= MIN_FRAGMENT_LENGTH:
-            fragments.add(dotted)
-    return list(fragments)
 
 
 def _find_dependents(session, repository_id: int, target_file_id: int, fragments: list[str]) -> set[str]:
@@ -81,7 +66,7 @@ def find_affected_modules(repo_id: str, direct_file_paths: list[str]) -> list[Af
             target = files_by_path.get(file_path)
             if target is None:
                 continue
-            dependents = _find_dependents(session, repository.id, target.id, _fragments_for(file_path))
+            dependents = _find_dependents(session, repository.id, target.id, fragments_for(file_path))
             for dependent_path in dependents:
                 reasons.setdefault(dependent_path, f"imports {file_path}")
 
@@ -91,7 +76,7 @@ def find_affected_modules(repo_id: str, direct_file_paths: list[str]) -> list[Af
             if file_row is None:
                 continue
 
-            fan_in = len(_find_dependents(session, repository.id, file_row.id, _fragments_for(file_path)))
+            fan_in = len(_find_dependents(session, repository.id, file_row.id, fragments_for(file_path)))
             has_endpoint = (
                 session.execute(
                     select(ApiEndpoint.id).where(ApiEndpoint.file_id == file_row.id).limit(1)

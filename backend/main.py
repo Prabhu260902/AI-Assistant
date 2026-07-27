@@ -8,6 +8,7 @@ from dataclasses import asdict
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from graphs.architecture import run_architecture_explanation
 from graphs.code_search import run_code_search
 from graphs.feature_planner import run_feature_plan
 from graphs.implementation import run_implementation
@@ -123,6 +124,32 @@ class ReviewResponse(BaseModel):
     findings: list[Finding]
 
 
+class ArchitectureRequest(BaseModel):
+    repo_id: str
+    query: str
+    top_k: int = 5
+
+
+class FlowNodeModel(BaseModel):
+    key: str
+    name: str
+    file_path: str
+    kind: str
+    detail: str | None = None
+
+
+class FlowEdgeModel(BaseModel):
+    from_key: str
+    to_key: str
+
+
+class ArchitectureResponse(BaseModel):
+    explanation: str
+    mermaid_diagram: str
+    nodes: list[FlowNodeModel]
+    edges: list[FlowEdgeModel]
+
+
 def _configure_langsmith() -> None:
     settings = get_settings()
     os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langsmith_tracing).lower()
@@ -214,6 +241,19 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return ReviewResponse(summary=result["summary"], findings=result["findings"])
+
+    @app.post("/architecture", response_model=ArchitectureResponse)
+    async def architecture(request: ArchitectureRequest) -> ArchitectureResponse:
+        result = run_architecture_explanation(request.repo_id, request.query, request.top_k)
+        flow_graph = result["flow_graph"]
+        nodes = [asdict(n) for n in flow_graph.nodes] if flow_graph else []
+        edges = [asdict(e) for e in flow_graph.edges] if flow_graph else []
+        return ArchitectureResponse(
+            explanation=result["explanation"],
+            mermaid_diagram=result["mermaid_diagram"],
+            nodes=nodes,
+            edges=edges,
+        )
 
     return app
 
