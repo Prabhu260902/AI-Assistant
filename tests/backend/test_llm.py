@@ -3,12 +3,13 @@ import urllib.error
 
 import pytest
 
-from services.llm import GroqProvider
+from services.llm import GroqProvider, get_llm_status
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict, headers: dict | None = None):
         self._payload = payload
+        self.headers = headers or {}
 
     def read(self):
         return json.dumps(self._payload).encode("utf-8")
@@ -86,6 +87,32 @@ def test_complete_raises_after_all_models_rate_limited(monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         provider.complete("hi")
     assert exc_info.value.code == 429
+
+
+def test_complete_captures_rate_limit_headers(monkeypatch):
+    headers = {
+        "x-ratelimit-limit-requests": "1000",
+        "x-ratelimit-remaining-requests": "956",
+        "x-ratelimit-limit-tokens": "12000",
+        "x-ratelimit-remaining-tokens": "10886",
+    }
+
+    def fake_urlopen(request):
+        return _FakeResponse({"choices": [{"message": {"content": "hi"}}]}, headers=headers)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    provider = GroqProvider(api_key="k", model="llama-x")
+    provider.complete("hi")
+
+    status = get_llm_status()
+    assert status == {
+        "model": "llama-x",
+        "limit_requests": 1000,
+        "remaining_requests": 956,
+        "limit_tokens": 12000,
+        "remaining_tokens": 10886,
+    }
 
 
 def test_complete_does_not_fall_back_on_non_rate_limit_error(monkeypatch):

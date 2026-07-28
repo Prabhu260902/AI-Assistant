@@ -21,7 +21,7 @@ import tree_sitter_language_pack as tslp
 from sqlalchemy import select
 
 from services.db import create_all, session_scope
-from services.ingest import _is_secret_file, _iter_source_files, _read_text
+from services.ingest import ProgressCallback, _is_secret_file, _iter_source_files, _read_text
 from services.models import ApiEndpoint, Call, File, Import, Repository, Symbol
 from services.repo_loader import derive_repo_id, resolve_repo
 
@@ -253,23 +253,28 @@ class KnowledgeGraphSummary:
     endpoints: int = 0
 
 
-def build_knowledge_graph(source: str, repo_id: str | None = None) -> KnowledgeGraphSummary:
+def build_knowledge_graph(
+    source: str, repo_id: str | None = None, on_progress: ProgressCallback | None = None
+) -> KnowledgeGraphSummary:
     repo_path = resolve_repo(source)
     repo_id = repo_id or derive_repo_id(source)
     summary = KnowledgeGraphSummary(repo_id=repo_id)
 
-    per_file: list[tuple[str, str, FileGraph]] = []
-    for file_path in _iter_source_files(repo_path):
-        if _is_secret_file(file_path.name):
-            continue
-        text = _read_text(file_path)
-        if text is None:
-            continue
+    file_paths = list(_iter_source_files(repo_path))
+    total_files = len(file_paths) or 1
 
-        rel_path = str(file_path.relative_to(repo_path))
-        language = tslp.detect_language_from_path(rel_path) or "text"
-        graph = extract_file_graph(text, language)
-        per_file.append((rel_path, language, graph))
+    per_file: list[tuple[str, str, FileGraph]] = []
+    for index, file_path in enumerate(file_paths, start=1):
+        if not _is_secret_file(file_path.name):
+            text = _read_text(file_path)
+            if text is not None:
+                rel_path = str(file_path.relative_to(repo_path))
+                language = tslp.detect_language_from_path(rel_path) or "text"
+                graph = extract_file_graph(text, language)
+                per_file.append((rel_path, language, graph))
+
+        if on_progress:
+            on_progress({"phase": "knowledge_graph", "current": index, "total": total_files})
 
     create_all()
     with session_scope() as session:

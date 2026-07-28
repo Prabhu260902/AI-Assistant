@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import ChatInput from "@/components/ChatInput";
 import ChatMessage from "@/components/ChatMessage";
-import IngestSummary from "@/components/IngestSummary";
+import GroqStatus from "@/components/GroqStatus";
+import IngestSummary, { IngestProgressBar } from "@/components/IngestSummary";
 import styles from "@/components/Chat.module.css";
-import type { ChatTurn, CopilotResponse, IngestResult } from "@/lib/types";
+import type { ChatTurn, CopilotResponse, IngestStreamEvent, LlmStatus } from "@/lib/types";
 
 const REPO_STORAGE_KEY = "allease.repoId";
 
@@ -13,10 +14,15 @@ function makeId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function updateTurn(id: string, patch: Partial<ChatTurn>) {
+  return (prev: ChatTurn[]) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t));
+}
+
 export default function Home() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [pending, setPending] = useState(false);
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
   const [repoId, setRepoId] = useState(() =>
     typeof window === "undefined" ? "" : window.localStorage.getItem(REPO_STORAGE_KEY) ?? "",
   );
@@ -38,9 +44,58 @@ export default function Home() {
     }
   }, []);
 
+  const refreshLlmStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/llm-status");
+      if (!res.ok) return;
+      setLlmStatus((await res.json()) as LlmStatus);
+    } catch {
+      // same as above — a badge failing to update shouldn't interrupt anything.
+    }
+  }, []);
+
+  // Inlined rather than delegated to refreshRepoOptions/refreshLlmStatus
+  // (used elsewhere, after handleSend/handleIngest) — an effect that calls
+  // a named useCallback-wrapped setter trips this project's react-hooks
+  // lint config even when the setState is behind an await; an inline async
+  // IIFE with its own cancellation guard is the pattern it accepts.
   useEffect(() => {
-    refreshRepoOptions();
-  }, [refreshRepoOptions]);
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/repos");
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.repos)) setRepoOptions(data.repos);
+      } catch {
+        // repo list is a convenience (autocomplete only) — ignore failures.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/llm-status");
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as LlmStatus;
+        if (!cancelled) setLlmStatus(data);
+      } catch {
+        // status badge is best-effort — ignore failures.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -61,26 +116,25 @@ export default function Home() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        setTurns((prev) =>
-          prev.map((t) =>
-            t.id === pendingId
-              ? { ...t, role: "error", pending: false, text: data.error ?? data.detail ?? "Request failed." }
-              : t,
-          ),
+        setTurns(
+          updateTurn(pendingId, {
+            role: "error",
+            pending: false,
+            text: data.error ?? data.detail ?? "Request failed.",
+          }),
         );
         return;
       }
 
-      setTurns((prev) =>
-        prev.map((t) => (t.id === pendingId ? { ...t, pending: false, response: data as CopilotResponse } : t)),
-      );
+      setTurns(updateTurn(pendingId, { pending: false, response: data as CopilotResponse }));
+      refreshLlmStatus();
     } catch (err) {
-      setTurns((prev) =>
-        prev.map((t) =>
-          t.id === pendingId
-            ? { ...t, role: "error", pending: false, text: err instanceof Error ? err.message : "Something went wrong." }
-            : t,
-        ),
+      setTurns(
+        updateTurn(pendingId, {
+          role: "error",
+          pending: false,
+          text: err instanceof Error ? err.message : "Something went wrong.",
+        }),
       );
     } finally {
       setPending(false);
@@ -94,35 +148,61 @@ export default function Home() {
     setPending(true);
 
     try {
-      const res = await fetch("/api/repos", {
+      const res = await fetch("/api/repos/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source, repo_id: repoId }),
       });
-      const data = await res.json();
 
-      if (!res.ok || data.error) {
-        setTurns((prev) =>
-          prev.map((t) =>
-            t.id === pendingId
-              ? { ...t, role: "error", pending: false, text: data.error ?? data.detail ?? "Ingestion failed." }
-              : t,
-          ),
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        setTurns(
+          updateTurn(pendingId, {
+            role: "error",
+            pending: false,
+            text: data.error ?? data.detail ?? "Ingestion failed.",
+          }),
         );
         return;
       }
 
-      const result = data as IngestResult;
-      setTurns((prev) => prev.map((t) => (t.id === pendingId ? { ...t, pending: false, ingest: result } : t)));
-      setRepoId(result.repo_id);
-      refreshRepoOptions();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      readLoop: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (!line) continue;
+
+          const event = JSON.parse(line) as IngestStreamEvent;
+
+          if (event.phase === "done") {
+            setTurns(updateTurn(pendingId, { pending: false, progress: undefined, ingest: event.summary }));
+            setRepoId(event.summary.repo_id);
+            refreshRepoOptions();
+            break readLoop;
+          }
+          if (event.phase === "error") {
+            setTurns(updateTurn(pendingId, { role: "error", pending: false, text: event.message }));
+            break readLoop;
+          }
+          setTurns(updateTurn(pendingId, { pending: false, progress: event }));
+        }
+      }
     } catch (err) {
-      setTurns((prev) =>
-        prev.map((t) =>
-          t.id === pendingId
-            ? { ...t, role: "error", pending: false, text: err instanceof Error ? err.message : "Something went wrong." }
-            : t,
-        ),
+      setTurns(
+        updateTurn(pendingId, {
+          role: "error",
+          pending: false,
+          text: err instanceof Error ? err.message : "Something went wrong.",
+        }),
       );
     } finally {
       setPending(false);
@@ -133,7 +213,10 @@ export default function Home() {
     <div className={styles.shell}>
       <header className={styles.header}>
         <span className={styles.headerTitle}>AllEase Engineering Copilot</span>
-        <span className={styles.headerSub}>search · plan · tickets · implement · review · architecture</span>
+        <div className={styles.headerRight}>
+          <GroqStatus status={llmStatus} />
+          <span className={styles.headerSub}>search · plan · tickets · implement · review · architecture</span>
+        </div>
       </header>
 
       <div className={styles.messageList} ref={listRef}>
@@ -164,15 +247,17 @@ export default function Home() {
           if (turn.role === "system") {
             return (
               <div className={`${styles.row} ${styles.rowSystem}`} key={turn.id}>
-                {turn.pending ? (
+                {turn.ingest ? (
+                  <IngestSummary result={turn.ingest} />
+                ) : turn.progress ? (
+                  <IngestProgressBar progress={turn.progress} />
+                ) : (
                   <span className={styles.loading}>
                     <span className={styles.loadingDot} />
                     <span className={styles.loadingDot} />
                     <span className={styles.loadingDot} />
                   </span>
-                ) : turn.ingest ? (
-                  <IngestSummary result={turn.ingest} />
-                ) : null}
+                )}
               </div>
             );
           }

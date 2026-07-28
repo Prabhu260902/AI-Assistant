@@ -121,11 +121,41 @@ export interface RepoListResult {
   repos: string[];
 }
 
+export type IngestPhase = "indexing" | "embedding" | "knowledge_graph";
+
+export interface IngestProgressEvent {
+  phase: IngestPhase;
+  current: number;
+  total: number;
+}
+
+export interface IngestDoneEvent {
+  phase: "done";
+  summary: IngestResult;
+}
+
+export interface IngestErrorEvent {
+  phase: "error";
+  message: string;
+}
+
+export type IngestStreamEvent = IngestProgressEvent | IngestDoneEvent | IngestErrorEvent;
+
+export interface LlmStatus {
+  available: boolean;
+  model: string | null;
+  limit_requests: number | null;
+  remaining_requests: number | null;
+  limit_tokens: number | null;
+  remaining_tokens: number | null;
+}
+
 export interface ChatTurn {
   id: string;
   role: "user" | "assistant" | "error" | "system";
   text?: string;
   response?: CopilotResponse;
   ingest?: IngestResult;
+  progress?: IngestProgressEvent;
   pending?: boolean;
 }

@@ -1,14 +1,17 @@
 """FastAPI application entrypoint."""
 
+import json
 import logging
 import os
+import queue
 import re
 import subprocess
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -26,6 +29,7 @@ from services.db import session_scope
 from services.git_diff import GitDiffError
 from services.ingest import ingest_repository
 from services.knowledge_graph import build_knowledge_graph
+from services.llm import get_llm_status
 from services.logging import configure_logging
 from services.models import Repository
 from services.repo_registry import get_repo_source
@@ -190,6 +194,15 @@ class IngestResponse(BaseModel):
 
 class RepoListResponse(BaseModel):
     repos: list[str]
+
+
+class LlmStatusResponse(BaseModel):
+    available: bool
+    model: str | None = None
+    limit_requests: int | None = None
+    remaining_requests: int | None = None
+    limit_tokens: int | None = None
+    remaining_tokens: int | None = None
 
 
 # Mirrors Chroma's own collection-name rule (services/vectorstore.py ultimately
@@ -365,11 +378,102 @@ def create_app() -> FastAPI:
             endpoints=graph_summary.endpoints,
         )
 
+    @app.post("/repos/stream")
+    async def add_repo_stream(request: IngestRequest) -> StreamingResponse:
+        """Same ingestion as POST /repos, but streams newline-delimited JSON
+        progress events as it goes instead of blocking until done — the chat
+        UI's /ingest command uses this one so it can show real progress
+        instead of an indefinite spinner for a repo that takes a while."""
+        if request.repo_id and not _REPO_ID_RE.match(request.repo_id):
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id must be 3-512 characters, letters/digits/._- only, "
+                "starting and ending with a letter or digit.",
+            )
+
+        def generate():
+            # ingest_repository/build_knowledge_graph are synchronous and
+            # call `on_progress` inline — a plain generator can't yield from
+            # inside a callback several frames down, so the actual work runs
+            # on a background thread that pushes events onto a queue, and
+            # this generator blocks on the queue and yields as they arrive.
+            event_queue: queue.Queue = queue.Queue()
+            done_marker = object()
+            outcome: dict = {}
+
+            def on_progress(event: dict) -> None:
+                event_queue.put(event)
+
+            def worker() -> None:
+                try:
+                    vector_summary = ingest_repository(
+                        request.source, repo_id=request.repo_id, on_progress=on_progress
+                    )
+                    graph_summary = build_knowledge_graph(
+                        request.source, repo_id=vector_summary.repo_id, on_progress=on_progress
+                    )
+                    outcome["vector_summary"] = vector_summary
+                    outcome["graph_summary"] = graph_summary
+                except (ValueError, subprocess.CalledProcessError) as exc:
+                    outcome["error"] = f"Could not ingest '{request.source}': {exc}"
+                finally:
+                    event_queue.put(done_marker)
+
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+
+            while True:
+                item = event_queue.get()
+                if item is done_marker:
+                    break
+                yield json.dumps(item) + "\n"
+
+            thread.join()
+
+            if "error" in outcome:
+                yield json.dumps({"phase": "error", "message": outcome["error"]}) + "\n"
+                return
+
+            vector_summary = outcome["vector_summary"]
+            graph_summary = outcome["graph_summary"]
+            yield (
+                json.dumps(
+                    {
+                        "phase": "done",
+                        "summary": {
+                            "repo_id": vector_summary.repo_id,
+                            "files_scanned": vector_summary.files_scanned,
+                            "files_indexed": vector_summary.files_indexed,
+                            "files_skipped": vector_summary.files_skipped,
+                            "chunks_indexed": vector_summary.chunks_indexed,
+                            "files": graph_summary.files,
+                            "symbols": graph_summary.symbols,
+                            "imports": graph_summary.imports,
+                            "calls": graph_summary.calls,
+                            "endpoints": graph_summary.endpoints,
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        return StreamingResponse(generate(), media_type="application/x-ndjson")
+
     @app.get("/repos", response_model=RepoListResponse)
     async def list_repos() -> RepoListResponse:
         with session_scope() as session:
             repo_ids = session.execute(select(Repository.repo_id).order_by(Repository.repo_id)).scalars().all()
         return RepoListResponse(repos=list(repo_ids))
+
+    @app.get("/llm/status", response_model=LlmStatusResponse)
+    async def llm_status() -> LlmStatusResponse:
+        """Groq's own per-minute rate-limit snapshot from the most recent
+        real call in this process — not the daily quota (Groq only reports
+        that inside a 429 error body, not on every response)."""
+        status = get_llm_status()
+        if status is None:
+            return LlmStatusResponse(available=False)
+        return LlmStatusResponse(available=True, **status)
 
     return app
 

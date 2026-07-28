@@ -14,6 +14,39 @@ from services.config import get_settings
 
 GROQ_CHAT_COMPLETIONS_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# Last-seen Groq rate-limit snapshot, refreshed on every real call — a status
+# display, not an audit trail, so a single shared dict is enough (no history,
+# no locking: worst case under concurrent calls is a status a few requests
+# stale, never wrong in a way that matters for a personal-use badge).
+_last_llm_status: dict | None = None
+
+
+def get_llm_status() -> dict | None:
+    """The most recent Groq rate-limit snapshot, or None if no real call has
+    completed yet in this process."""
+    return _last_llm_status
+
+
+def _capture_rate_limit_status(model: str, headers) -> None:
+    global _last_llm_status
+
+    def _int_or_none(value: str | None) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except ValueError:
+            return None
+
+    # These are Groq's per-minute buckets, not the per-day quota that a 429
+    # error body can separately report — labeled as such wherever displayed
+    # so it isn't mistaken for the daily cap.
+    _last_llm_status = {
+        "model": model,
+        "limit_requests": _int_or_none(headers.get("x-ratelimit-limit-requests")),
+        "remaining_requests": _int_or_none(headers.get("x-ratelimit-remaining-requests")),
+        "limit_tokens": _int_or_none(headers.get("x-ratelimit-limit-tokens")),
+        "remaining_tokens": _int_or_none(headers.get("x-ratelimit-remaining-tokens")),
+    }
+
 
 class LLMProvider(Protocol):
     def complete(self, prompt: str, json_mode: bool = False) -> str:
@@ -73,6 +106,7 @@ class GroqProvider:
             },
         )
         with urllib.request.urlopen(request) as response:
+            _capture_rate_limit_status(model, response.headers)
             response_payload = json.loads(response.read())
         return response_payload["choices"][0]["message"]["content"]
 

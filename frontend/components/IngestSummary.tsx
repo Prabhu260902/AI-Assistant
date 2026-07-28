@@ -1,5 +1,22 @@
-import type { IngestResult } from "@/lib/types";
+import type { IngestProgressEvent, IngestResult } from "@/lib/types";
 import styles from "./Chat.module.css";
+
+const PHASE_LABELS: Record<string, string> = {
+  indexing: "Indexing files",
+  embedding: "Embedding chunks",
+  knowledge_graph: "Building knowledge graph",
+};
+
+export function IngestProgressBar({ progress }: { progress: IngestProgressEvent }) {
+  return (
+    <div className={styles.systemCard}>
+      <p className={styles.systemTitle}>
+        {PHASE_LABELS[progress.phase] ?? progress.phase} — {progress.current}/{progress.total}
+      </p>
+      <progress className={styles.progressBar} value={progress.current} max={progress.total || 1} />
+    </div>
+  );
+}
 
 export default function IngestSummary({ result }: { result: IngestResult }) {
   const stats: [string, number][] = [
