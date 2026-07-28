@@ -84,6 +84,54 @@ def test_unmapped_language_returns_empty_graph():
     assert graph.endpoints == []
 
 
+def test_dart_bare_call_is_extracted():
+    src = "void bar() {\n  doThing();\n}\n"
+
+    graph = extract_file_graph(src, "dart")
+
+    assert any(c.callee_name == "doThing" for c in graph.calls)
+
+
+def test_dart_method_call_is_extracted():
+    src = "void bar() {\n  obj.method();\n}\n"
+
+    graph = extract_file_graph(src, "dart")
+
+    assert any(c.callee_name == "method" for c in graph.calls)
+
+
+def test_dart_chained_call_extracts_rightmost_segment():
+    src = "void bar() {\n  a.b.c.deepMethod();\n}\n"
+
+    graph = extract_file_graph(src, "dart")
+
+    assert any(c.callee_name == "deepMethod" for c in graph.calls)
+    assert not any(c.callee_name in ("a", "b", "c") for c in graph.calls)
+
+
+def test_dart_named_argument_call_is_extracted():
+    """Regression test: the real shape that motivated adding Dart support —
+    ApiClient.multipartPostGroups(url: ApiUrls.addProduct) has a nested
+    dotted named-argument value, which must not be mistaken for the call's
+    own callee name."""
+    src = "void bar() {\n  ApiClient.multipartPostGroups(url: ApiUrls.addProduct);\n}\n"
+
+    graph = extract_file_graph(src, "dart")
+
+    assert any(c.callee_name == "multipartPostGroups" for c in graph.calls)
+
+
+def test_dart_file_has_no_endpoints():
+    """Dart/Flutter mobile code has no server-route-registration concept —
+    confirms this returns an empty list rather than KeyError-ing on
+    ENDPOINT_QUERIES["dart"], which doesn't exist."""
+    src = "void bar() {\n  doThing();\n}\n"
+
+    graph = extract_file_graph(src, "dart")
+
+    assert graph.endpoints == []
+
+
 # --- persistence tests (in-memory SQLite, no Docker/Postgres) ------------
 
 

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import tree_sitter_language_pack as tslp
 
 CHUNK_MAX_CHARS = 2000
+MIN_CHUNK_CHARS = 400
 FALLBACK_CHUNK_LINES = 60
 
 
@@ -49,6 +50,28 @@ def _line_number(encoded: bytes, byte_offset: int) -> int:
     return encoded.count(b"\n", 0, byte_offset) + 1
 
 
+def _merge_small_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Glue consecutive chunk spans together while the running span is still
+    under MIN_CHUNK_CHARS. Some real-world files (observed directly: a 2500-
+    line Dart file) make tree-sitter-language-pack's chunker return dozens of
+    near-empty fragments — one as small as the single word "async" — instead
+    of one coherent function body. A lone keyword or a bare class signature
+    is useless as an independently-retrieved search result, so this merges
+    runs of small neighbors into one bigger, actually-meaningful chunk.
+    Always takes max(end)/min(start) rather than concatenating text, so it's
+    correct even if spans overlap or have small gaps between them."""
+    if not spans:
+        return []
+    merged = [spans[0]]
+    for start, end in spans[1:]:
+        last_start, last_end = merged[-1]
+        if (last_end - last_start) < MIN_CHUNK_CHARS:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _chunk_with_tree_sitter(text: str, language: str) -> list[Chunk]:
     try:
         result = tslp.process(
@@ -65,14 +88,18 @@ def _chunk_with_tree_sitter(text: str, language: str) -> list[Chunk]:
         return []
 
     encoded = text.encode("utf-8")
+    raw_spans = [
+        (raw_chunk.start_byte, raw_chunk.end_byte) for raw_chunk in (result.chunks or []) if raw_chunk.content.strip()
+    ]
+
     chunks = []
-    for raw_chunk in result.chunks or []:
-        if not raw_chunk.content.strip():
+    for start_byte, end_byte in _merge_small_spans(raw_spans):
+        content = encoded[start_byte:end_byte].decode("utf-8", errors="replace")
+        if not content.strip():
             continue
-        start_byte, end_byte = raw_chunk.start_byte, raw_chunk.end_byte
         chunks.append(
             Chunk(
-                content=raw_chunk.content,
+                content=content,
                 start_line=_line_number(encoded, start_byte),
                 end_line=_line_number(encoded, max(start_byte, end_byte - 1)),
                 start_byte=start_byte,

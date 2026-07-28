@@ -87,7 +87,12 @@ def search_repo(repo_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
         results.append(
             SearchResult(
                 chunk_id=chunk_id,
-                content=documents_by_id.get(chunk_id, ""),
+                # metadata["content"] is the real, complete chunk text;
+                # the indexed `document` has import lines stripped out to
+                # keep them from diluting ranking (services/ingest.py) — the
+                # `.get(..., documents_by_id...)` fallback only matters for
+                # data indexed before that split existed.
+                content=metadata.get("content") or documents_by_id.get(chunk_id, ""),
                 file_path=metadata.get("file_path", ""),
                 start_line=metadata.get("start_line", 0),
                 end_line=metadata.get("end_line", 0),

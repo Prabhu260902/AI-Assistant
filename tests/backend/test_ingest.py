@@ -1,7 +1,16 @@
 import chromadb
 from chromadb.api.types import EmbeddingFunction
 
-from services.ingest import DENY_DIRS, _is_secret_file, _iter_source_files, _read_text, index_chunks, ingest_repository
+from services.ingest import (
+    DENY_DIRS,
+    _is_import_dominated,
+    _is_secret_file,
+    _iter_source_files,
+    _read_text,
+    _strip_import_lines,
+    index_chunks,
+    ingest_repository,
+)
 
 
 def _write(path, content=""):
@@ -110,6 +119,117 @@ def test_index_chunks_upsert_is_idempotent():
     index_chunks(collection, chunks)
 
     assert collection.count() == 1
+
+
+def test_is_import_dominated_true_for_pure_import_block():
+    content = "\n".join(
+        [
+            "import 'dart:convert';",
+            "import 'package:flutter/material.dart';",
+            "import '../../config/api_client.dart';",
+            "#include \"Warnings.xcconfig\"",
+        ]
+    )
+    assert _is_import_dominated(content)
+
+
+def test_is_import_dominated_false_when_real_code_follows_imports():
+    """Regression test: a real file's leading chunk had 11 import lines
+    followed by a real class declaration (8 more lines) — 58% import lines,
+    below the threshold. Confirms the filter doesn't discard chunks that
+    happen to start with imports but carry real, useful content too."""
+    content = "\n".join(
+        [
+            "import 'dart:convert';",
+            "import 'package:flutter/material.dart';",
+            "",
+            "class ManageProductsScreen extends StatefulWidget {",
+            "  const ManageProductsScreen({Key? key}) : super(key: key);",
+            "",
+            "  @override",
+            "  State<ManageProductsScreen> createState() => _ManageProductsScreenState();",
+            "}",
+        ]
+    )
+    assert not _is_import_dominated(content)
+
+
+def test_is_import_dominated_false_for_empty_content():
+    assert not _is_import_dominated("")
+    assert not _is_import_dominated("   \n\n  ")
+
+
+def test_strip_import_lines_removes_only_import_lines():
+    """Regression test: this exact 20-line chunk (11 import lines + a real
+    class stub) kept outranking chunks that actually answered the user's
+    question, because import vocabulary repeats across nearly every file in
+    the corpus. Stripping the import lines before embedding removes that
+    noise from what drives ranking."""
+    content = "\n".join(
+        [
+            "import 'dart:convert';",
+            "import 'package:flutter/material.dart';",
+            "",
+            "class ManageProductsScreen extends StatefulWidget {",
+            "  const ManageProductsScreen({Key? key}) : super(key: key);",
+            "}",
+        ]
+    )
+
+    stripped = _strip_import_lines(content)
+
+    assert "import" not in stripped
+    assert "class ManageProductsScreen" in stripped
+
+
+def test_strip_import_lines_falls_back_to_original_when_nothing_survives():
+    content = "import 'dart:convert';\nimport 'package:flutter/material.dart';"
+
+    assert _strip_import_lines(content) == content
+
+
+def test_ingest_repository_strips_imports_from_indexed_text_but_keeps_full_content(tmp_path, monkeypatch):
+    _write(tmp_path / "mixed.py", "import os\nimport sys\n\n\ndef handler():\n    return 'ok'\n")
+
+    client = chromadb.EphemeralClient()
+    monkeypatch.setattr("services.ingest.get_vector_store", lambda: _FakeVectorStore(client))
+
+    ingest_repository(str(tmp_path), repo_id="strip-fixture-repo")
+
+    collection = _ephemeral_collection(client, "strip-fixture-repo")
+    all_docs = collection.get()
+    assert len(all_docs["ids"]) == 1
+
+    indexed_document = all_docs["documents"][0]
+    stored_content = all_docs["metadatas"][0]["content"]
+
+    # what gets embedded/BM25-indexed has the import lines removed...
+    assert "import os" not in indexed_document
+    assert "def handler" in indexed_document
+
+    # ...but the original, complete text is preserved for citations/LLM context
+    assert "import os" in stored_content
+    assert "def handler" in stored_content
+
+
+def test_ingest_repository_skips_import_only_files(tmp_path, monkeypatch):
+    _write(
+        tmp_path / "barrel.py",
+        "\n".join(f"from .module_{i} import Thing{i}" for i in range(20)) + "\n",
+    )
+    _write(tmp_path / "real.py", "def handler():\n    return 'ok'\n")
+
+    client = chromadb.EphemeralClient()
+    monkeypatch.setattr("services.ingest.get_vector_store", lambda: _FakeVectorStore(client))
+
+    summary = ingest_repository(str(tmp_path), repo_id="import-only-fixture-repo")
+
+    collection = _ephemeral_collection(client, "import-only-fixture-repo")
+    all_docs = collection.get()
+    combined = " ".join(all_docs["documents"])
+    assert "Thing0" not in combined
+    assert "handler" in combined
+    assert summary.files_skipped >= 1
 
 
 def test_ingest_repository_end_to_end_against_local_fixture(tmp_path, monkeypatch):

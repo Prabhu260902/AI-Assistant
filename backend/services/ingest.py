@@ -1,6 +1,7 @@
 """Repository ingestion: walk a repo, chunk files, index chunks into the vector store."""
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -71,6 +72,53 @@ def _is_secret_file(filename: str) -> bool:
     return False
 
 
+# Language-agnostic-ish import-statement shapes, covering the languages this
+# project has actually seen in practice (Python, Dart, JS/TS, Java/Kotlin,
+# Go, C/C++, C#).
+_IMPORT_LINE_RE = re.compile(
+    r"^\s*("
+    r"import\b"
+    r"|from\s+\S+\s+import\b"
+    r"|#include\b"
+    r"|using\s+[\w.]+;"
+    r"|require\("
+    r"|package\s+[\w.]+;?\s*$"
+    r")"
+)
+IMPORT_DOMINATED_THRESHOLD = 0.8
+
+
+def _is_import_dominated(content: str) -> bool:
+    """A chunk that's almost entirely import statements (a Dart file's
+    50-line block of `import 'package:...'` lines was a confirmed real
+    example) carries little independently useful meaning for semantic code
+    search — worse, since nearly every file in a codebase shares similar
+    import vocabulary, these chunks were winning search-ranking slots away
+    from chunks that actually answer "what does X do." Structural import
+    data is still captured in full by Phase 3's knowledge graph
+    (services/knowledge_graph.py); this only affects what gets embedded for
+    retrieval, not what's tracked structurally."""
+    lines = [line for line in content.splitlines() if line.strip()]
+    if not lines:
+        return False
+    import_lines = sum(1 for line in lines if _IMPORT_LINE_RE.match(line))
+    return (import_lines / len(lines)) >= IMPORT_DOMINATED_THRESHOLD
+
+
+def _strip_import_lines(content: str) -> str:
+    """Removes import-statement lines from the text that gets embedded/BM25-
+    indexed for a chunk that's mixed (some imports, but not import-dominated
+    enough to be dropped outright by _is_import_dominated). Confirmed real
+    case: a 20-line chunk that was 11 import lines + a real class stub kept
+    outranking chunks with the actual answer, because import vocabulary
+    (package names, "flutter", "provider", ...) repeats across nearly every
+    file in a codebase. The *original* content — imports included — is still
+    what's stored/shown for citations; only what drives ranking changes."""
+    kept_lines = [line for line in content.splitlines() if not _IMPORT_LINE_RE.match(line)]
+    stripped = "\n".join(kept_lines).strip()
+    return stripped or content
+
+
 @dataclass
 class IngestSummary:
     repo_id: str
@@ -136,7 +184,7 @@ def ingest_repository(
                 summary.files_skipped += 1
             else:
                 rel_path = str(file_path.relative_to(repo_path))
-                chunks = chunk_text(text, rel_path)
+                chunks = [c for c in chunk_text(text, rel_path) if not _is_import_dominated(c.content)]
                 if not chunks:
                     summary.files_skipped += 1
                 else:
@@ -146,13 +194,19 @@ def ingest_repository(
                         pending.append(
                             {
                                 "id": chunk_id,
-                                "document": chunk.content,
+                                # What gets embedded/BM25-indexed — import
+                                # lines stripped so shared import vocabulary
+                                # doesn't dilute ranking. `metadata.content`
+                                # keeps the real, complete text for citations
+                                # and LLM context; only ranking input differs.
+                                "document": _strip_import_lines(chunk.content),
                                 "metadata": {
                                     "repo_id": repo_id,
                                     "file_path": rel_path,
                                     "start_line": chunk.start_line,
                                     "end_line": chunk.end_line,
                                     "language": chunk.language,
+                                    "content": chunk.content,
                                 },
                             }
                         )

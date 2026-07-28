@@ -82,6 +82,35 @@ def test_search_repo_on_empty_collection_returns_empty_list(monkeypatch):
     assert results == []
 
 
+def test_search_repo_returns_full_content_from_metadata_not_indexed_document(monkeypatch):
+    """services/ingest.py embeds an import-stripped version of a mixed chunk
+    to keep ranking clean, but stores the real, complete text in
+    metadata["content"] for citations/LLM context — search_repo must read
+    content from there, not from the (now import-stripped) indexed document."""
+    client = chromadb.EphemeralClient()
+    collection = client.get_or_create_collection(
+        "hybrid-search-content-fallback-repo", embedding_function=_FakeEmbeddingFunction()
+    )
+    collection.upsert(
+        ids=["a"],
+        documents=["def handler(): return 'ok'"],  # import-stripped, as ingest.py would index it
+        metadatas=[
+            {
+                "file_path": "app.py",
+                "start_line": 1,
+                "end_line": 3,
+                "language": "python",
+                "content": "import os\n\ndef handler(): return 'ok'",  # the real, full chunk
+            }
+        ],
+    )
+    monkeypatch.setattr("services.hybrid_search.get_vector_store", lambda: _FakeVectorStore(client))
+
+    results = search_repo("hybrid-search-content-fallback-repo", "handler", top_k=1)
+
+    assert results[0].content == "import os\n\ndef handler(): return 'ok'"
+
+
 def test_search_repo_paginates_past_a_single_get_page(monkeypatch):
     """Regression test: a collection larger than one collection.get() page
     (33,218 chunks in a real repo) made Chroma's SQLite backend raise

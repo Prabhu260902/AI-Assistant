@@ -2,11 +2,13 @@
 and API endpoints, persisted to Postgres.
 
 Imports/symbols use `tree_sitter_language_pack.process()`, which works
-generically across languages. Call-graph and API-endpoint detection use
-direct low-level tree-sitter queries and are scoped to Python (decorator
-style: `@router.get("/path")`) and JavaScript/TypeScript/TSX (call style:
-`app.get("/path", handler)`), filtered to a known HTTP-verb allowlist to
-avoid false positives from unrelated decorators/calls.
+generically across languages. Call-graph detection uses direct low-level
+tree-sitter queries and is scoped to Python, JavaScript/TypeScript/TSX, and
+Dart. API-endpoint detection (decorator style: `@router.get("/path")` for
+Python, call style: `app.get("/path", handler)` for JS) is scoped to
+Python/JS/TS/TSX only — Dart/Flutter mobile code has no equivalent of a
+server route registration, so it's calls-only — filtered to a known
+HTTP-verb allowlist to avoid false positives from unrelated decorators/calls.
 
 Call/endpoint handler resolution is a same-file name match against known
 symbols — a heuristic, not full semantic/import resolution (an unresolved
@@ -37,6 +39,30 @@ _JS_CALL_QUERY = """
 (call_expression function: (member_expression property: (property_identifier) @callee))
 """
 
+# Dart's grammar has no single `call_expression`-style node with a
+# `function:` field the way Python/JS do — `obj.method(args)` is a flat run
+# of sibling nodes (an identifier/selector for the callee, immediately
+# followed by another selector wrapping the call's parentheses) under
+# whatever the enclosing expression happens to be. Verified directly against
+# the real grammar: matching "an identifier (or the last segment of a
+# dotted access) immediately followed by a parenthesized selector" under any
+# parent (`_` wildcard + `.` immediate-sibling anchor) correctly captures
+# bare calls, method calls, chained calls, and named-argument calls —
+# always the rightmost name segment, same convention the JS query above
+# already uses for `object.method()`.
+_DART_CALL_QUERY = """
+(_
+  (identifier) @callee
+  .
+  (selector (argument_part))
+)
+(_
+  (selector (unconditional_assignable_selector (identifier) @callee))
+  .
+  (selector (argument_part))
+)
+"""
+
 _PY_ENDPOINT_QUERY = """
 (decorated_definition
   (decorator (call
@@ -56,6 +82,7 @@ CALL_QUERIES = {
     "javascript": _JS_CALL_QUERY,
     "typescript": _JS_CALL_QUERY,
     "tsx": _JS_CALL_QUERY,
+    "dart": _DART_CALL_QUERY,
 }
 ENDPOINT_QUERIES = {
     "python": _PY_ENDPOINT_QUERY,
@@ -168,7 +195,13 @@ def extract_file_graph(text: str, language: str | None) -> FileGraph:
             parser = tslp.get_parser(language)
             tree = parser.parse(text.encode("utf-8"))
             graph.calls = _extract_calls(tree, text, language)
-            graph.endpoints = _extract_endpoints(tree, text, language)
+            # Not every language with call support also has endpoint
+            # support (Dart has no server-route-registration concept) —
+            # gated independently rather than assuming the two always
+            # coincide, since ENDPOINT_QUERIES[language] would otherwise
+            # KeyError for a calls-only language.
+            if language in ENDPOINT_QUERIES:
+                graph.endpoints = _extract_endpoints(tree, text, language)
         except Exception:
             pass
 
