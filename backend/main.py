@@ -2,11 +2,15 @@
 
 import logging
 import os
+import re
+import subprocess
 from contextlib import asynccontextmanager
 from dataclasses import asdict, is_dataclass
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from graphs.architecture import run_architecture_explanation
 from graphs.code_search import run_code_search
@@ -18,8 +22,12 @@ from graphs.router import run_copilot
 from graphs.ticket_generator import run_generate_tickets
 from services.code_apply import ApplyError, FileChange, apply_changes
 from services.config import get_settings
+from services.db import session_scope
 from services.git_diff import GitDiffError
+from services.ingest import ingest_repository
+from services.knowledge_graph import build_knowledge_graph
 from services.logging import configure_logging
+from services.models import Repository
 from services.repo_registry import get_repo_source
 from state.implementation_state import ProposedChange
 from state.review_state import Finding
@@ -162,6 +170,35 @@ class CopilotResponse(BaseModel):
     result: dict
 
 
+class IngestRequest(BaseModel):
+    source: str
+    repo_id: str | None = None
+
+
+class IngestResponse(BaseModel):
+    repo_id: str
+    files_scanned: int
+    files_indexed: int
+    files_skipped: int
+    chunks_indexed: int
+    files: int
+    symbols: int
+    imports: int
+    calls: int
+    endpoints: int
+
+
+class RepoListResponse(BaseModel):
+    repos: list[str]
+
+
+# Mirrors Chroma's own collection-name rule (services/vectorstore.py ultimately
+# hands repo_id straight to Chroma as the collection name) — validated here so
+# a bad custom repo_id fails with a clear 400 instead of the generic 500 the
+# global exception handler below would otherwise produce.
+_REPO_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{1,510}[a-zA-Z0-9]$")
+
+
 def _to_jsonable(value):
     if is_dataclass(value) and not isinstance(value, type):
         return _to_jsonable(asdict(value))
@@ -194,6 +231,15 @@ def create_app() -> FastAPI:
         yield
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        # Starlette's own default for an uncaught exception is a plain-text
+        # "Internal Server Error" body, not JSON — every client in this
+        # project (including the frontend's proxy route) expects a JSON
+        # response even on failure, so this ensures that holds everywhere.
+        logger.error("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
     @app.get("/health")
     async def health() -> dict:
@@ -287,6 +333,43 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         return CopilotResponse(intent=state["intent"], result=_to_jsonable(state["result"]))
+
+    @app.post("/repos", response_model=IngestResponse)
+    async def add_repo(request: IngestRequest) -> IngestResponse:
+        """Ingest a repo (local path or git URL) into both the vector store
+        and the knowledge graph — the same two steps scripts/ingest_repo.py
+        already runs, just reachable over HTTP so the chat UI's /ingest
+        command doesn't need a terminal."""
+        if request.repo_id and not _REPO_ID_RE.match(request.repo_id):
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id must be 3-512 characters, letters/digits/._- only, "
+                "starting and ending with a letter or digit.",
+            )
+        try:
+            vector_summary = ingest_repository(request.source, repo_id=request.repo_id)
+            graph_summary = build_knowledge_graph(request.source, repo_id=vector_summary.repo_id)
+        except (ValueError, subprocess.CalledProcessError) as exc:
+            raise HTTPException(status_code=400, detail=f"Could not ingest '{request.source}': {exc}") from exc
+
+        return IngestResponse(
+            repo_id=vector_summary.repo_id,
+            files_scanned=vector_summary.files_scanned,
+            files_indexed=vector_summary.files_indexed,
+            files_skipped=vector_summary.files_skipped,
+            chunks_indexed=vector_summary.chunks_indexed,
+            files=graph_summary.files,
+            symbols=graph_summary.symbols,
+            imports=graph_summary.imports,
+            calls=graph_summary.calls,
+            endpoints=graph_summary.endpoints,
+        )
+
+    @app.get("/repos", response_model=RepoListResponse)
+    async def list_repos() -> RepoListResponse:
+        with session_scope() as session:
+            repo_ids = session.execute(select(Repository.repo_id).order_by(Repository.repo_id)).scalars().all()
+        return RepoListResponse(repos=list(repo_ids))
 
     return app
 
