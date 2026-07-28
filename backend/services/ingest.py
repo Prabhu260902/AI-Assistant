@@ -30,6 +30,18 @@ DENY_DIRS = {
     ".vscode",
     ".cache",
     ".tox",
+    # Mobile/cross-platform vendor + build-tool caches — same spirit as
+    # node_modules/.venv above, just for iOS/Android/Flutter ecosystems.
+    # Confirmed necessary in practice: an ingested Flutter+iOS+Android repo
+    # returned CocoaPods library source and Dart build-cache files as its
+    # top search results instead of any of the app's own code.
+    "Pods",
+    "Carthage",
+    ".dart_tool",
+    ".symlinks",
+    "ephemeral",
+    ".gradle",
+    ".kotlin",
 }
 MAX_FILE_SIZE_BYTES = 1_000_000
 BATCH_SIZE = 100

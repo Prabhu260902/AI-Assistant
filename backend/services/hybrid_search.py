@@ -15,6 +15,14 @@ VECTOR_CANDIDATES = 15
 KEYWORD_CANDIDATES = 15
 RRF_K = 60
 
+# collection.get() with no limit asks Chroma's SQLite backend to bind one
+# variable per row (or more) in a single query — fine for a few hundred
+# chunks, but a large repo can have tens of thousands, which blows past
+# SQLite's bound-variable ceiling entirely (hit for real on a 33k-chunk
+# collection: "too many SQL variables"). Paginating keeps every individual
+# call's row count small regardless of collection size.
+GET_PAGE_SIZE = 1000
+
 
 @dataclass
 class SearchResult:
@@ -35,17 +43,34 @@ def _reciprocal_rank_fusion(rankings: list[list[str]], k: int = RRF_K) -> dict[s
     return scores
 
 
+def _get_all_chunks(collection) -> tuple[list[str], list[str], list[dict]]:
+    all_ids: list[str] = []
+    all_documents: list[str] = []
+    all_metadatas: list[dict] = []
+    offset = 0
+    while True:
+        page = collection.get(limit=GET_PAGE_SIZE, offset=offset)
+        page_ids: list[str] = page.get("ids") or []
+        if not page_ids:
+            break
+        all_ids.extend(page_ids)
+        all_documents.extend(page.get("documents") or [])
+        all_metadatas.extend(page.get("metadatas") or [])
+        if len(page_ids) < GET_PAGE_SIZE:
+            break
+        offset += GET_PAGE_SIZE
+    return all_ids, all_documents, all_metadatas
+
+
 def search_repo(repo_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
     collection = get_vector_store().get_or_create_collection(repo_id)
 
-    all_chunks = collection.get()
-    all_ids: list[str] = all_chunks.get("ids") or []
+    all_ids, all_documents, all_metadatas = _get_all_chunks(collection)
     if not all_ids:
         return []
 
-    all_documents: list[str] = all_chunks.get("documents") or []
     documents_by_id = dict(zip(all_ids, all_documents))
-    metadatas_by_id = dict(zip(all_ids, all_chunks.get("metadatas") or []))
+    metadatas_by_id = dict(zip(all_ids, all_metadatas))
 
     vector_result = collection.query(query_texts=[query], n_results=min(VECTOR_CANDIDATES, len(all_ids)))
     vector_ids = (vector_result.get("ids") or [[]])[0]

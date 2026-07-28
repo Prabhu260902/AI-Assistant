@@ -80,3 +80,29 @@ def test_search_repo_on_empty_collection_returns_empty_list(monkeypatch):
     results = search_repo("empty-repo", "anything", top_k=5)
 
     assert results == []
+
+
+def test_search_repo_paginates_past_a_single_get_page(monkeypatch):
+    """Regression test: a collection larger than one collection.get() page
+    (33,218 chunks in a real repo) made Chroma's SQLite backend raise
+    "too many SQL variables" on the old unbatched collection.get() call.
+    Forces a tiny page size so a handful of documents already spans
+    multiple pages, proving pagination collects every document rather than
+    silently truncating to the first page."""
+    monkeypatch.setattr("services.hybrid_search.GET_PAGE_SIZE", 2)
+
+    client = chromadb.EphemeralClient()
+    collection = client.get_or_create_collection(
+        "hybrid-search-pagination-repo", embedding_function=_FakeEmbeddingFunction()
+    )
+    ids = [f"chunk-{i}" for i in range(5)]
+    collection.upsert(
+        ids=ids,
+        documents=[f"def function_{i}(): return {i}" for i in range(5)],
+        metadatas=[{"file_path": f"module_{i}.py", "start_line": 1, "end_line": 1, "language": "python"} for i in range(5)],
+    )
+    monkeypatch.setattr("services.hybrid_search.get_vector_store", lambda: _FakeVectorStore(client))
+
+    results = search_repo("hybrid-search-pagination-repo", "function", top_k=5)
+
+    assert {r.chunk_id for r in results} == set(ids)

@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // Runs the FastAPI backend directly under VSCode's debugger — click
+      // in the gutter next to any line in backend/ to set a breakpoint
+      // (e.g. main.py's `copilot` route, or agents/router.py's
+      // classify_node/dispatch_node), then Run and Debug this config and
+      // send a request (curl or the chat UI).
+      //
+      // Deliberately runs WITHOUT --reload: uvicorn's reloader spawns a
+      // separate worker subprocess that this debugger wouldn't be attached
+      // to, so breakpoints would silently never hit. Restart this config
+      // after editing backend code instead of relying on live-reload.
+      "name": "Debug FastAPI backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["main:app", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
+      "envFile": "${workspaceFolder}/config/.env",
+      "justMyCode": true,
+      "console": "integratedTerminal"
+    }
+  ]
+}
