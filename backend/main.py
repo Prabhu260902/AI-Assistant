@@ -51,7 +51,7 @@ class GraphInvokeResponse(BaseModel):
 class SearchRequest(BaseModel):
     repo_id: str
     query: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class Citation(BaseModel):
@@ -69,7 +69,7 @@ class SearchResponse(BaseModel):
 class PlanRequest(BaseModel):
     repo_id: str
     feature_description: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class AffectedModuleModel(BaseModel):
@@ -88,7 +88,7 @@ class PlanResponse(BaseModel):
 class TicketRequest(BaseModel):
     repo_id: str
     feature_description: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class TicketResponse(BaseModel):
@@ -101,7 +101,7 @@ class TicketResponse(BaseModel):
 class ImplementRequest(BaseModel):
     repo_id: str
     feature_description: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class ImplementResponse(BaseModel):
@@ -140,7 +140,7 @@ class ReviewResponse(BaseModel):
 class ArchitectureRequest(BaseModel):
     repo_id: str
     query: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class FlowNodeModel(BaseModel):
@@ -166,7 +166,7 @@ class ArchitectureResponse(BaseModel):
 class CopilotRequest(BaseModel):
     repo_id: str
     message: str
-    top_k: int = 5
+    top_k: int = 25
 
 
 class CopilotResponse(BaseModel):

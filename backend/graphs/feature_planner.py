@@ -21,7 +21,7 @@ def build_feature_planner_graph():
 _compiled_graph = build_feature_planner_graph()
 
 
-def run_feature_plan(repo_id: str, feature_description: str, top_k: int = 5) -> FeaturePlanState:
+def run_feature_plan(repo_id: str, feature_description: str, top_k: int = 25) -> FeaturePlanState:
     return _compiled_graph.invoke(
         {
             "repo_id": repo_id,

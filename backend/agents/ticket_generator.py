@@ -13,7 +13,7 @@ _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def plan_node(state: TicketGenState) -> dict:
-    plan_state = run_feature_plan(state["repo_id"], state["feature_description"], state.get("top_k", 5))
+    plan_state = run_feature_plan(state["repo_id"], state["feature_description"], state.get("top_k", 25))
     return {
         "plan": plan_state["plan"],
         "affected_modules": plan_state["affected_modules"],

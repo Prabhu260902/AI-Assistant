@@ -19,7 +19,7 @@ def build_code_search_graph():
 _compiled_graph = build_code_search_graph()
 
 
-def run_code_search(repo_id: str, query: str, top_k: int = 5) -> CodeSearchState:
+def run_code_search(repo_id: str, query: str, top_k: int = 25) -> CodeSearchState:
     return _compiled_graph.invoke(
         {"repo_id": repo_id, "query": query, "top_k": top_k, "results": [], "answer": "", "citations": []}
     )

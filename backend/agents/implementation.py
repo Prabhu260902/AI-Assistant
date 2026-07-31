@@ -29,7 +29,7 @@ def _strip_wrapping_code_fence(text: str) -> str:
 
 
 def plan_node(state: ImplementationState) -> dict:
-    plan_state = run_feature_plan(state["repo_id"], state["feature_description"], state.get("top_k", 5))
+    plan_state = run_feature_plan(state["repo_id"], state["feature_description"], state.get("top_k", 25))
     return {
         "plan": plan_state["plan"],
         "risks": plan_state["risks"],

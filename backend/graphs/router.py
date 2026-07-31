@@ -19,7 +19,7 @@ def build_router_graph():
 _compiled_graph = build_router_graph()
 
 
-def run_copilot(repo_id: str, message: str, top_k: int = 5) -> RouterState:
+def run_copilot(repo_id: str, message: str, top_k: int = 25) -> RouterState:
     return _compiled_graph.invoke(
         {
             "repo_id": repo_id,

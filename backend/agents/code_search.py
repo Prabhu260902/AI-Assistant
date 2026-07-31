@@ -7,7 +7,7 @@ from state.code_search_state import CodeSearchState
 
 
 def retrieve_node(state: CodeSearchState) -> dict:
-    results = search_repo(state["repo_id"], state["query"], top_k=state.get("top_k", 5))
+    results = search_repo(state["repo_id"], state["query"], top_k=state.get("top_k", 25))
     return {"results": results}
 
 

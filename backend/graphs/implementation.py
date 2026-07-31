@@ -24,7 +24,7 @@ def build_implementation_graph():
 _compiled_graph = build_implementation_graph()
 
 
-def run_implementation(repo_id: str, feature_description: str, top_k: int = 5) -> ImplementationState:
+def run_implementation(repo_id: str, feature_description: str, top_k: int = 25) -> ImplementationState:
     return _compiled_graph.invoke(
         {
             "repo_id": repo_id,

@@ -12,7 +12,7 @@ from state.architecture_state import ArchitectureState
 
 
 def build_graph_node(state: ArchitectureState) -> dict:
-    results = search_repo(state["repo_id"], state["query"], top_k=state.get("top_k", 5))
+    results = search_repo(state["repo_id"], state["query"], top_k=state.get("top_k", 25))
 
     # Not every hit resolves to a traceable symbol (e.g. README.md has no
     # Postgres File/Symbol rows at all) — try each hit in ranked order

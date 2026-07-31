@@ -19,7 +19,7 @@ def build_ticket_generator_graph():
 _compiled_graph = build_ticket_generator_graph()
 
 
-def run_generate_tickets(repo_id: str, feature_description: str, top_k: int = 5) -> TicketGenState:
+def run_generate_tickets(repo_id: str, feature_description: str, top_k: int = 25) -> TicketGenState:
     return _compiled_graph.invoke(
         {
             "repo_id": repo_id,

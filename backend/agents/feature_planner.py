@@ -10,7 +10,7 @@ FAN_IN_RISK_THRESHOLD = 3
 
 
 def retrieve_node(state: FeaturePlanState) -> dict:
-    results = search_repo(state["repo_id"], state["feature_description"], top_k=state.get("top_k", 5))
+    results = search_repo(state["repo_id"], state["feature_description"], top_k=state.get("top_k", 25))
     return {"context_results": results}
 
 

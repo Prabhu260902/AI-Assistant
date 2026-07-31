@@ -62,7 +62,7 @@ def _get_all_chunks(collection) -> tuple[list[str], list[str], list[dict]]:
     return all_ids, all_documents, all_metadatas
 
 
-def search_repo(repo_id: str, query: str, top_k: int = 5) -> list[SearchResult]:
+def search_repo(repo_id: str, query: str, top_k: int = 25) -> list[SearchResult]:
     collection = get_vector_store().get_or_create_collection(repo_id)
 
     all_ids, all_documents, all_metadatas = _get_all_chunks(collection)

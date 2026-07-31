@@ -1,5 +1,6 @@
 """Prompt template for the Feature Planner Agent."""
 
+from services.context_budget import truncate_blocks_to_budget
 from services.hybrid_search import SearchResult
 from services.impact_analysis import AffectedModule
 
@@ -28,7 +29,7 @@ def build_planner_prompt(
     for i, result in enumerate(context_results, start=1):
         label = f"[{i}] {result.file_path}:{result.start_line}-{result.end_line}"
         context_blocks.append(f"{label}\n{result.content}")
-    context = "\n\n".join(context_blocks) or "(no relevant code excerpts found)"
+    context = "\n\n".join(truncate_blocks_to_budget(context_blocks)) or "(no relevant code excerpts found)"
 
     module_lines = []
     for module in affected_modules:

@@ -19,7 +19,7 @@ def build_architecture_graph():
 _compiled_graph = build_architecture_graph()
 
 
-def run_architecture_explanation(repo_id: str, query: str, top_k: int = 5) -> ArchitectureState:
+def run_architecture_explanation(repo_id: str, query: str, top_k: int = 25) -> ArchitectureState:
     return _compiled_graph.invoke(
         {
             "repo_id": repo_id,
